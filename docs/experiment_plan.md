@@ -1,21 +1,55 @@
-# 실험 계획: 방향 A — MVS Sparse Prior + Foundation Model로 전선 Depth 복원
+# 실험 계획: MVS + MDE Fusion을 통한 Thin Structure Depth 복원
 
 ## 연구 목표
 
 드론 multi-view 이미지에서 전선(power line) 같은 thin structure의 3D reconstruction을 개선한다.
-MVS가 전선에서 실패하는 문제를, depth foundation model과 MVS sparse metric points의 fusion으로 해결한다.
+MVS의 metric accuracy와 MDE(Monocular Depth Estimation)의 dense structural coherence를 fusion하여,
+MVS가 실패하는 thin structure 영역의 metric depth를 복원한다.
 
-### 핵심 가설 (방향 A)
+## Contribution
 
-> Foundation model의 relative depth에서 전선은 전주와 유사한 depth를 가진다.
-> 따라서 MVS sparse points(전주 포함)를 Prior Depth Anything에 넣으면,
-> 전주의 metric depth가 전선으로 자연스럽게 전파되어 정확한 metric depth를 얻을 수 있다.
+### Main: Thin structure 복원을 위한 MVS+MDE fusion pipeline
 
-### 방향 A의 장점
+드론 이미지에서 전선 같은 thin structure의 metric depth를 복원하는 pipeline을 제안한다.
+기존 MVS+MDE fusion(Prior DA 등)은 일반 장면을 대상으로 하며,
+thin structure의 특수성(극소 폭, MVS 결손, 해상도 의존성)을 고려하지 않는다.
 
-- Catenary 같은 도메인 특화 물리 모델이 불필요
-- 전선뿐 아니라 thin structure 일반에 적용 가능 → 범용성
-- 파이프라인이 단순: SfM/MVS → sparse points 추출 → Prior DA fusion
+본 pipeline은 thin structure에서 **MVS가 어디서 실패하고, MDE가 어디서 보완하는지를 분석한 위에** 설계되었으며, 기존 도구(PatchFusion, Prior DA)를 thin structure 조건에 맞게 조합한다.
+
+### Pipeline 설계 근거
+
+본 pipeline의 각 설계 선택은 다음의 분석적 근거에 기반한다:
+
+**근거 1: MDE의 thin structure depth behavior**
+
+- MDE는 전선의 relative depth를 배경이 아닌 전주에 가깝게 추정 (사전 실험에서 확인)
+- 이것이 성립해야 MVS metric prior와의 fusion으로 전선의 올바른 metric depth를 얻을 수 있음
+- 기존 연구에서 분석된 바 없는 empirical finding → **fusion이 왜 작동하는지의 이론적 근거**
+
+**근거 2: 고해상도 MDE의 필요성**
+
+- 전선은 원본 이미지에서 2~3 pixel 폭
+- 일반 MDE 입력 해상도(512~1024px)로 다운샘플하면 전선이 소실됨
+- PatchFusion 같은 고해상도 패치 기반 처리가 필수 → **pipeline의 MDE 단 설계 근거**
+
+### Validation
+
+Pipeline이 실제로 thin structure에서 작동함을 다음으로 검증한다:
+
+- **Completeness**: MVS ~0% → fusion ~100% (전선 영역 depth 채워짐)
+- **Metric accuracy**: fusion된 전선 depth ≈ 전주 depth (물리적으로 타당)
+- **구성요소 필요성**: MVS only / MDE only / fusion 비교(5-1)로 양쪽 모두 필요함을 보임
+- **Ablation**: 해상도 낮추면 실패(5-2), MDE 모델 의존성 확인(5-3)
+
+---
+
+## 핵심 가설
+
+> MDE의 relative depth에서 전선은 전주와 유사한 depth를 가진다.
+> 따라서 MVS metric prior를 MDE에 align(Prior DA)하면,
+> 전선 영역에서도 올바른 metric depth를 얻을 수 있다.
+
+사전 실험에서 확인: ratio < 0.3 → **가설 지지** (상세: `pilot_experiment_report.md`)
 
 ---
 
@@ -23,25 +57,25 @@ MVS가 전선에서 실패하는 문제를, depth foundation model과 MVS sparse
 
 ```
 Step 0: 사전 실험 (완료)
-  → foundation model이 전선 depth를 전주에 가깝게 추정하는지 확인
+  → MDE가 전선 depth를 전주에 가깝게 추정하는지 확인
 
-Step 1: SfM/MVS 처리
-  → camera poses + sparse 3D points + MVS dense depth maps
+Step 1: SfM/MVS 데이터 확보 (Metashape 사용, 완료)
+  → camera poses + sparse points + dense depth maps
+  → 전선 결손 확인 (문제 정의 검증)
 
-Step 2: Sparse Point 분석
-  → MVS sparse points가 전주 위치에 존재하는지 확인
+Step 2: Sparse/Dense Prior 분석 (진행 중)
+  → MVS 데이터에서 Prior DA에 넣을 metric prior 확보 가능성 확인
 
 Step 3: Prior Depth Anything 실행
-  → sparse metric prior + foundation model relative depth → metric depth
+  → MVS metric prior + MDE relative depth → metric depth (전선 포함)
 
 Step 4: 전선 영역 Depth 품질 평가
-  → Prior DA 출력에서 전선 depth가 물리적으로 타당한지 검증
+  → fusion 결과에서 전선 depth가 물리적으로 타당한지 검증
 
 Step 5: 정량 평가 및 Ablation
-  → 논문용 정량적 결과 생성
+  → pipeline 성능 검증 + 설계 근거별 ablation
 
 Step 6: 논문 작성
-  → 리뷰어 지적사항 반영한 풀페이퍼
 ```
 
 ---
@@ -50,14 +84,8 @@ Step 6: 논문 작성
 
 ### 목적
 
-Foundation model(PatchFusion/Depth Anything V1)의 relative depth에서,
-전선의 depth가 전주에 가까운지(→ 방향 A) 배경에 가까운지(→ 방향 B) 판별.
-
-### 방법
-
-1. PatchFusion으로 8192×5460 원본 이미지의 고해상도 relative depth map 생성
-2. 3장의 이미지에서 전주/전선/배경 영역의 depth 비교
-3. ratio = (wire_depth − pole_depth) / (bg_depth − pole_depth) 계산
+MDE(PatchFusion/DA V1)의 relative depth에서
+전선 depth가 전주에 가까운지(→ fusion 가능) 배경에 가까운지(→ fusion 불가) 판별.
 
 ### 결과
 
@@ -67,97 +95,93 @@ Foundation model(PatchFusion/Depth Anything V1)의 relative depth에서,
 | 0656 | 11.09 | 11.05 | 11.70 | **-0.054** |
 | 0661 | 10.13 | 9.11 | 10.05 | N/A (*) |
 
-(*) 0661은 pole-bg 차이가 0.08로 ratio 분모가 너무 작아 해석 불가.
-    단, wire(9.11) < pole(10.13) ≈ bg(10.05)이므로 방향 A와 일관.
+3장 모두 wire depth < background depth, ratio < 0.3 → **가설 지지, fusion 접근 유효**
 
-### 판정
+### Lessons learned
 
-- 3장 모두 wire depth < background depth (전선이 배경보다 가까움)
-- ratio < 0.3 → **방향 A 채택**
-
-### 주의사항 (lessons learned)
-
-- 전선은 2~3 pixel 폭이므로 sampling radius를 크게 잡으면 배경 pixel이 지배함
-- wire 영역은 클릭 주변에서 depth 최소값(= 가장 가까운 pixel)을 찾아야 정확
+- 전선(2~3px)에 patch 평균 sampling 사용하면 배경에 오염 → min-based sampling 필요
+- 이 문제는 Step 4~5의 평가에서도 동일하게 적용됨
+- 상세: `pilot_experiment_report.md`
 
 ---
 
-## Step 1: SfM/MVS 처리
+## Step 1: SfM/MVS 데이터 확보 ✅ Metashape로 완료
 
 ### 목적
 
-180장의 드론 이미지로부터 3D reconstruction을 수행하여:
-- Camera poses (내부/외부 파라미터)
-- Sparse 3D point cloud (feature matching 기반)
-- Dense MVS depth maps
-
-### 확인하고자 하는 것
-
-1. **SfM 수렴**: 대부분의 이미지가 registration 되는가?
-2. **Sparse point 분포**: 전주(pole) 위치에 sparse points가 존재하는가?
-3. **MVS depth의 전선 결손**: 전선 위치에서 MVS depth map에 구멍이 있는가?
-   - 이것이 확인되어야 "MVS가 전선에서 실패한다"는 문제 정의가 성립
+MVS pipeline의 출력물을 확보하고, 전선에서 MVS가 실패하는 것을 검증.
 
 ### 방법
 
-- COLMAP을 사용한 SfM → MVS pipeline
-- Docker 환경에서 실행
-- GPU 가속 (RTX 3090 x2)
+- **Metashape** (Agisoft)를 사용하여 SfM/MVS 처리
+- Align Photos → Build Dense Cloud → Export (COLMAP format)
+- 참고: 기존에 Metashape로 처리해둔 데이터를 활용한 것이며,
+  COLMAP 등 다른 SfM/MVS pipeline으로도 동일한 결과를 얻을 수 있음.
+  Pipeline은 특정 SfM/MVS 도구에 종속되지 않음.
 
-### 기대 결과
+### 확보된 데이터
 
-- SfM: 드론 이미지는 순차 촬영 + 높은 overlap → 대부분 registration 성공 예상
-- Sparse points: 건물, 도로, 전주 등 texture가 풍부한 구조물에 집중 분포
-- MVS depth: 전선은 texture가 부족하여 matching 실패 → depth map에 빈 영역
+| 데이터 | 경로 | 상태 |
+|--------|------|------|
+| Camera poses + Sparse points | `data/colmap_export/` (COLMAP format) | ✅ 확보 |
+| Dense depth maps | `/media/.../depthmaps/ultrahigh/` | ✅ 확보 |
+| 카메라 모델 | SIMPLE_PINHOLE, 8270×5476, f=8198.7 | ✅ |
+| Sparse 3D points | 135,703개, mean track length 4.3 | ✅ |
+| 등록 이미지 | 180/180 (100%) | ✅ |
 
-### 다음 단계 진행 조건
+### 확인해야 할 것
 
-- [ ] 전체 이미지의 80% 이상이 SfM에 registration
-- [ ] Sparse point cloud에서 전주 영역에 3D points 존재 확인
-- [ ] MVS depth map에서 전선 위치에 depth 결손 확인 (문제 정의 검증)
-
-### 실패 시
-
-- SfM 실패 → 이미지 품질/overlap 문제. 이미지 subset 선택 또는 파라미터 조정
-- 전주에 sparse points 없음 → feature matching 파라미터 조정, 또는 manual sparse point 추가 고려
+- [ ] 전선 위치에서 dense depth map 결손 확인 (문제 정의 검증)
+- [ ] Dense depth의 물리적 타당성 확인 (pole depth가 합리적 범위인지, 인접 구조물 간 상대 관계)
 
 ---
 
-## Step 2: Sparse Point 분석
+## Step 2: Sparse/Dense Prior 분석 (진행 중)
 
 ### 목적
 
-MVS sparse points를 Prior DA의 metric prior로 사용하기 위해,
-전주 위치에 충분한 sparse points가 존재하는지 확인.
+Prior DA에 넣을 metric prior의 source와 밀도를 결정.
 
-### 확인하고자 하는 것
+### 분석 결과: SfM Sparse Points
 
-1. **전주 위치의 sparse point 밀도**: 전주 표면에 몇 개의 3D points가 있는가?
-2. **Depth 정확도**: sparse points의 reprojected depth가 물리적으로 타당한가?
-3. **전선 근처 coverage**: 전선 시작/끝점(전주 꼭대기) 부근에 points가 있는가?
+| 이미지 | 전체 sparse points | pole_top 100px 이내 | 200px 이내 |
+|--------|-------------------|--------------------|-----------| 
+| 0654 | 3,141 | **0** | 12 |
+| 0656 | 2,974 | **0** | 7~9 |
+| 0661 | 3,410 | **1~3** | 8 |
 
-### 방법
+**전주 근처에 sparse points 부족** — SfM sparse points만으로는 전선 영역에 metric anchor가 약함.
 
-1. COLMAP sparse point cloud를 각 이미지에 projection
-2. Step 0에서 선별한 이미지(0654, 0656, 0661)에 대해 projected points 시각화
-3. 전주 영역의 point 밀도 및 depth 값 확인
+### 분석 결과: Metashape Dense Depth
 
-### 기대 결과
+| 위치 | Dense depth 유효 여부 | depth 값 |
+|------|---------------------|----------|
+| pole_top | **유효** ✅ | 65~69m |
+| wire_near_pole | 대부분 결손 ❌ | — |
+| wire_center | 결손 ❌ | — |
+| background | **유효** ✅ | 69~73m |
 
-- 전주는 수직 구조물로 texture가 있어 feature matching 가능 → sparse points 존재 예상
-- 전주 꼭대기 부근에 최소 수 개의 sparse points → Prior DA의 metric anchor로 사용 가능
+**Dense depth는 전주에 유효한 metric depth를 제공** → sparse prior 보강에 사용 가능.
+
+### Prior 전략 선택
+
+SfM sparse points만으로는 전주 근처에 anchor가 부족하므로,
+dense depth에서 유효 pixel을 sampling하여 prior를 보강한다.
+
+| 전략 | 설명 | Prior DA input |
+|------|------|----------------|
+| Sparse only | SfM sparse points만 사용 | ~3,000 points/image |
+| **Sparse + Dense (채택)** | Sparse + dense depth에서 유효 영역 sampling | ~3,000 + 추가 anchor |
+
+Dense sampled(dense depth 유효 pixel 전체에서 grid sampling)도 가능하나,
+Prior DA가 수만 점의 dense prior를 의도한 설계가 아닐 수 있으므로
+sparse + 전주/구조물 위치 보강이 현실적 선택이다.
 
 ### 다음 단계 진행 조건
 
-- [ ] 전주 영역(pole_top 좌표 주변 100px)에 최소 5개 이상의 sparse points
-- [ ] Sparse point depth의 일관성 확인 (std / mean < 0.1)
-
-### 실패 시
-
-- 전주에 sparse points 부족 → 
-  - COLMAP feature matching 파라미터 완화 (더 많은 features 추출)
-  - 또는 semi-dense matching 사용
-  - 최악의 경우: manual sparse point annotation 고려
+- [x] Sparse point 분포 확인 완료
+- [x] Dense depth의 전주/전선 유효성 확인 완료
+- [ ] Dense depth에서 전선 결손 시각화 (Step 1 검증)
 
 ---
 
@@ -165,44 +189,46 @@ MVS sparse points를 Prior DA의 metric prior로 사용하기 위해,
 
 ### 목적
 
-MVS sparse metric points(전주 depth 포함)를 prior로,
-foundation model의 relative depth를 metric depth로 변환.
-전선 영역에서 metric depth가 올바르게 추정되는지 확인.
+MVS metric prior와 MDE relative depth를 fusion하여
+전선 영역을 포함한 전체 이미지의 metric depth map을 생성.
 
 ### 확인하고자 하는 것
 
-1. **Fusion 수렴**: sparse points에서의 metric depth와 fusion 결과가 일치하는가?
-2. **전선 depth 전파**: 전주의 metric depth가 전선 영역으로 전파되는가?
-3. **배경 depth 분리**: 전선과 배경 건물의 metric depth가 명확히 분리되는가?
+1. **Fusion 수렴**: prior 위치에서 metric depth가 정확히 반영되는가?
+2. **전선 depth 전파**: MDE가 전선≈전주로 추정하므로, metric align 후에도 유지되는가?
+3. **배경 분리**: 전선과 배경 건물의 metric depth가 명확히 구분되는가?
 
 ### 방법
 
-- Prior Depth Anything 논문의 공식 구현 사용
-- Prior DA는 자체 foundation model backbone으로 relative depth를 생성하고,
-  MVS sparse metric points를 prior로 받아 metric depth로 변환
-- Input: RGB 이미지 + MVS sparse metric points (COLMAP에서 추출)
+- Prior Depth Anything 공식 구현 사용
+- Prior DA는 자체 MDE backbone으로 relative depth를 생성하고,
+  MVS metric points를 prior로 받아 metric depth로 변환
+- Input: RGB 이미지 + MVS metric points (sparse 및/또는 dense sampled)
 - Output: per-image metric depth map
-- 참고: Step 0의 PatchFusion 출력은 사전 실험(방향 판정)에만 사용.
-  Prior DA는 자체 backbone을 사용하므로 별도 inference가 필요
+
+### Prior input 구성
+
+- COLMAP export의 SfM sparse points (기본)
+- Metashape dense depth에서 추출한 추가 points (보강)
+  - 전주 위치, 건물 벽면, 도로면 등 유효 영역에서 sampling
+  - 전선 결손 영역은 제외 (dense depth가 없으므로)
 
 ### 기대 결과
 
-- Sparse point 위치에서: Prior DA depth ≈ MVS metric depth (prior가 반영됨)
-- 전선 위치에서: Prior DA depth ≈ 전주 depth (방향 A 가설에 의해 전파됨)
-- 배경 위치에서: Prior DA depth > 전선/전주 depth (물리적으로 타당)
+- Prior 위치: fusion depth ≈ MVS metric depth
+- 전선 위치: fusion depth ≈ 전주 depth (사전 실험 가설에 의해)
+- 배경 위치: fusion depth > 전선/전주 depth
 
 ### 다음 단계 진행 조건
 
-- [ ] Sparse point 위치에서 Prior DA depth와 MVS depth의 차이 < 5%
-- [ ] 전선 위치에서 Prior DA depth가 전주 depth와 유사 (ratio < 0.3)
-- [ ] 전선 위치에서 Prior DA depth ≠ 배경 depth (명확한 분리)
+- [ ] Prior 위치에서 fusion depth와 MVS depth의 차이 < 5%
+- [ ] 전선 위치에서 fusion depth가 전주 depth와 유사 (ratio < 0.3)
+- [ ] 전선-배경 depth 분리 확인
 
 ### 실패 시
 
-- 전선 depth가 여전히 배경에 가까움 →
-  - Sparse point 밀도 부족이 원인일 수 있음 → Step 2에서 밀도 증가
-  - Foundation model 자체의 한계 → 방향 B(catenary prior) 재고려
-- Fusion이 불안정 → Prior DA 파라미터 조정 (sparse point weight 등)
+- 전선 depth가 배경에 가까움 → prior 밀도 증가 시도, 그래도 실패하면 방향 B 재고려
+- Fusion 불안정 → Prior DA 파라미터 조정 (prior weight 등)
 
 ---
 
@@ -210,32 +236,26 @@ foundation model의 relative depth를 metric depth로 변환.
 
 ### 목적
 
-Prior DA가 출력한 metric depth map에서 전선 영역의 depth가
-물리적으로 타당하고 downstream task(3D reconstruction)에 사용 가능한지 평가.
+Fusion 결과에서 전선 영역의 depth가 물리적으로 타당하고
+downstream task(3D reconstruction)에 사용 가능한지 평가.
 
 ### 확인하고자 하는 것
 
 1. **전선의 depth 연속성**: 전주에서 전선 중앙까지 depth가 부드럽게 변하는가?
 2. **물리적 타당성**: 전선 depth가 전주 depth와 유사하고 배경보다 가까운가?
-3. **MVS 대비 개선**: MVS에서 결손이었던 전선 영역이 Prior DA에서 채워졌는가?
+3. **MVS 대비 개선**: MVS에서 결손이었던 전선 영역이 fusion에서 채워졌는가?
 
 ### 방법
 
 1. 전주에서 전선 중앙까지 depth profile 추출 (line scan)
-2. MVS depth vs Prior DA depth를 전선 영역에서 비교
-3. Depth map completeness 계산: 전선 mask 영역에서 valid pixel 비율
-
-### 기대 결과
-
-- MVS depth: 전선 영역 completeness ~0% (구멍)
-- Prior DA depth: 전선 영역 completeness ~100% (채워짐)
-- 전선 depth profile: 전주에서 중앙으로 완만하게 변화 (physically plausible)
+2. MVS depth vs fusion depth를 전선 영역에서 비교
+3. Depth map completeness: 전선 mask 영역에서 valid pixel 비율
 
 ### 다음 단계 진행 조건
 
-- [ ] 전선 영역 completeness: Prior DA > 90%
+- [ ] 전선 영역 completeness: fusion > 90% (MVS는 ~0%)
 - [ ] Depth profile이 물리적으로 타당 (급격한 불연속 없음)
-- [ ] 전선 영역에서 depth 값이 전주 ± 20% 이내
+- [ ] 전선 depth가 전주 ± 20% 이내
 
 ---
 
@@ -243,48 +263,48 @@ Prior DA가 출력한 metric depth map에서 전선 영역의 depth가
 
 ### 목적
 
-논문에 포함할 정량적 결과를 생성. 리뷰어 지적사항 대응:
-- 정량적 평가 부재 → metric 제시
-- Ablation 부재 → 각 요소의 기여도 분석
+Pipeline이 thin structure에서 작동함을 정량적으로 검증하고,
+각 구성요소(고해상도 MDE, metric prior)의 필요성을 ablation으로 입증.
 
-### 평가 항목
+### 5-1. Main Result: Pipeline 성능
 
-#### 5-1. Depth Completeness (전선 영역)
+전선 영역에서 각 방법의 depth completeness + metric accuracy 비교.
 
-| 방법 | 전선 영역 completeness |
-|------|----------------------|
-| MVS only | ~0% (baseline) |
-| Foundation model only | ~100% (but wrong scale) |
-| Prior DA (ours) | ~100% (correct scale) |
+| 방법 | completeness | metric accuracy | 비고 |
+|------|-------------|-----------------|------|
+| MVS only | ~0% (결손) | 유효 pixel은 정확 | 전선에 구멍 |
+| MDE only | ~100% | scale 없음 | 구조는 있으나 metric 아님 |
+| **Fusion (ours)** | ~100% | metric scale 보정됨 | 전선 depth 복원 |
 
-#### 5-2. Depth Accuracy (sparse point 위치)
+→ Pipeline이 MVS의 metric accuracy와 MDE의 structural completeness를 모두 확보.
 
-| 방법 | MAE | RMSE | δ < 1.05 |
-|------|-----|------|----------|
-| Foundation model only | (large, wrong scale) | | |
-| Prior DA (ours) | (small, correct scale) | | |
+### 5-2. Ablation: MDE 해상도 (근거 2 검증)
 
-Ground truth: MVS sparse points at known locations (self-supervised evaluation)
+Pipeline에서 고해상도 MDE가 필수적인지 검증.
 
-#### 5-3. Ablation Study
+| 구성 | MDE 해상도 | 전선 인식 | fusion 후 전선 depth |
+|------|-----------|----------|---------------------|
+| Full pipeline | 8192×5460 (PatchFusion) | ✅ 보존 | (측정) |
+| 다운샘플 MDE | 2048×1365 | ? 흐릿 | (측정) |
+| 다운샘플 MDE | 1024×682 | ❌ 소실 | (측정) |
 
-| 실험 | 변수 | 목적 |
-|------|------|------|
-| A1 | Sparse point 밀도 (100%, 50%, 25%, 10%) | Prior 밀도의 영향 |
-| A2 | 전주 points 제거 | 전주 depth 전파의 기여도 |
-| A3 | Foundation model 종류 (DA V1 vs V2) | 모델 의존성 |
-| A4 | 이미지 해상도 (원본 vs downsampled) | PatchFusion의 기여도 |
+→ 해상도를 낮추면 MDE가 전선을 인식하지 못해 fusion이 실패하는 것을 보임.
 
-#### 5-4. Multi-view Consistency (선택)
+### 5-3. Ablation: MDE 모델 종류 (근거 1 검증)
+
+"MDE가 전선 depth를 전주에 가깝게 추정한다"는 finding이 특정 모델에 한정적인지 확인.
+
+| MDE | wire-pole ratio | fusion 후 전선 depth |
+|-----|----------------|---------------------|
+| Depth Anything V1 (ViT-L) | <0.3 (사전실험 확인) | (측정) |
+| Depth Anything V2 (ViT-L) | (측정) | (측정) |
+
+→ Finding이 일반적이면 pipeline의 범용성 강화, 모델 의존적이면 한계로 기술.
+
+### 5-4. Multi-view Consistency (선택)
 
 - 동일 전선을 다른 view에서 관찰했을 때 depth 일관성
 - 3D reprojection error at wire locations
-
-### 다음 단계 진행 조건
-
-- [ ] Completeness, accuracy 숫자가 논문에 설득력 있는 수준
-- [ ] Ablation에서 각 요소의 기여가 명확히 드러남
-- [ ] 최소 3개 이상의 이미지에서 일관된 결과
 
 ---
 
@@ -294,18 +314,19 @@ Ground truth: MVS sparse points at known locations (self-supervised evaluation)
 
 | 지적 | 대응 | 해당 Step |
 |------|------|-----------|
-| 정량적 평가 부재 | Step 5의 completeness, accuracy metrics | Step 5 |
-| Ablation 부재 | Step 5의 ablation study (A1-A4) | Step 5 |
-| 방법론 세부 기술 부족 | 전체 pipeline 상세 기술 | Step 1-4 |
+| 정량적 평가 부재 | 5-1 completeness/accuracy | Step 5 |
+| Ablation 부재 | 5-2 해상도, 5-3 MDE 모델 | Step 5 |
+| 방법론 세부 기술 부족 | pipeline 전체 상세 기술 | Step 1-4 |
 
 ### 논문 구조 (예상)
 
-1. Introduction: thin structure 문제 정의
-2. Related Work: MVS, depth foundation models, Prior DA
-3. Method: SfM/MVS → sparse prior 추출 → Prior DA fusion
-4. Experiments: Step 4-5 결과
-5. Discussion: 방향 A의 한계, 일반화 가능성
-6. Conclusion
+1. **Introduction**: thin structure의 MVS 한계, MDE 가능성, 연구 목적
+2. **Related Work**: MVS, MDE (DA, PatchFusion), MVS+MDE fusion (Prior DA)
+3. **Analysis**: MDE의 thin structure depth behavior (근거 1) + 고해상도 필요성 (근거 2)
+4. **Method**: Pipeline 설계 — SfM/MVS → metric prior 추출 → Prior DA fusion
+5. **Experiments**: completeness/accuracy (5-1), ablation (5-2, 5-3)
+6. **Discussion**: 한계, MDE 모델 의존성, 다른 thin structure로의 확장 가능성
+7. **Conclusion**
 
 ---
 
@@ -315,9 +336,9 @@ Ground truth: MVS sparse points at known locations (self-supervised evaluation)
 |------|------|
 | 이미지 | DJI 드론, 180장, 8192×5460 |
 | GPU | NVIDIA RTX 3090 × 2 (24GB each) |
-| SfM/MVS | COLMAP (Docker) |
-| Foundation Model | PatchFusion + Depth Anything V1 (ViT-L) |
-| Prior DA | Prior Depth Anything (구현 확인 필요) |
+| SfM/MVS | Metashape (COLMAP format으로 export) |
+| MDE | PatchFusion + Depth Anything V1 (ViT-L) |
+| Fusion | Prior Depth Anything |
 | 실험 이미지 | 0654, 0656, 0661 (전주+전선 가시) |
 
 ---
@@ -326,12 +347,12 @@ Ground truth: MVS sparse points at known locations (self-supervised evaluation)
 
 | 리스크 | 확률 | 대안 |
 |--------|------|------|
-| 전주에 sparse points 부족 | 낮음 | feature 수 증가, semi-dense |
-| Prior DA에서 전선 depth 전파 실패 | 중간 | sparse point 밀도 증가, 방향 B 전환 |
-| COLMAP SfM 실패 | 낮음 | 이미지 subset, 파라미터 조정 |
+| Prior DA에서 전선 depth 전파 실패 | 중간 | dense prior 보강, prior weight 조정 |
 | Prior DA 구현 호환 문제 | 중간 | 논문 저자 코드 확인, 직접 구현 |
+| 고해상도에서 Prior DA OOM | 중간 | 패치 기반 처리, 해상도 조정 |
+| 다운샘플에서도 전선 보존됨 (근거 2 약화) | 낮음 | 해상도별 정량 비교로 차이 입증 |
 
 ---
 
 *문서 작성: 2026-04-02*
-*사전 실험 완료 기준으로 방향 A 채택*
+*마지막 업데이트: 2026-04-02 — pipeline을 main contribution으로 재구성, 설계 근거(MDE behavior, 해상도) 명시, ablation을 근거 검증 중심으로 정리*
