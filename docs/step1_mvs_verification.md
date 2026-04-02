@@ -26,7 +26,10 @@ regions.json에 수동 지정된 각 영역 좌표(pole_top, wire_center, wire_n
 completeness = (depth > 0인 pixel 수) / (patch 내 전체 pixel 수)
 ```
 
-- **Sampling 영역**: 클릭 좌표 중심 r=10 패치 (21×21 = 441 pixels)
+- **Sampling 영역**: 클릭 좌표 중심 r=3 패치 (7×7 = 49 pixels)
+- **r=3 선택 근거**: 전선 폭이 원본 이미지에서 2~3 pixel이므로,
+  전선 폭 + 양쪽 약간의 여유(±2px)를 포함하는 최소 패치 크기.
+  패치가 너무 크면(r=10 등) 배경 valid pixel이 포함되어 completeness가 과대 측정됨.
 - **유효 기준**: depth > 0 (Metashape에서 depth 추정 실패 시 0)
 
 ### 방법의 한계
@@ -34,7 +37,6 @@ completeness = (depth > 0인 pixel 수) / (patch 내 전체 pixel 수)
 - 전선 "경로 전체"가 아니라 **사용자가 클릭한 점 주변**만 측정
 - 전선 경로를 따라 연속적으로 sampling하면 더 대표성 있는 결과를 얻을 수 있으나,
   현재는 전선 mask가 없으므로 점 기반 측정을 사용
-- 향후 전선 segmentation mask를 만들면 경로 기반 completeness 측정 가능
 
 ### Depth profile 비교
 
@@ -54,39 +56,37 @@ MVS와 MDE를 비교. 전선은 수직 방향으로 2~3 pixel 폭이므로,
 
 이미지 전체에서 약 절반만 유효. 하늘, 어두운 영역, texture 부족 영역에서 결손 발생.
 
-### 2. 영역별 Completeness (r=10, 21×21 patch)
+### 2. 영역별 Completeness (r=3, 7×7 patch)
 
 | 이미지 | 영역 | 좌표 | completeness |
 |--------|------|------|-------------|
-| 0654 | **wire_center** | (6172, 2680) | **0%** (0/441) |
-| 0654 | wire_near_pole | (2393, 2873) | 91% |
-| 0654 | pole_top | (2271, 2634) | 71% |
-| 0654 | background | (5515, 2484) | 62% |
-| 0656 | **wire_center** | (4734, 2935) | **20%** (86/441) |
-| 0656 | **wire_near_pole** | (6454, 2860) | **0%** (0/441) |
-| 0656 | pole_top | (6620, 2715) | 60% |
-| 0656 | pole_top | (1127, 2700) | 83% |
-| 0656 | background | (4366, 2492) | 89% |
-| 0661 | **wire_center** | (4687, 3119) | **15%** (67/441) |
-| 0661 | **wire_near_pole** | (3125, 2999) | **4%** (16/441) |
-| 0661 | **wire_near_pole** | (3448, 2832) | **13%** (57/441) |
-| 0661 | pole_top | (2894, 2877) | 98% |
-| 0661 | pole_top | (7999, 2911) | 48% |
-| 0661 | background | (4331, 2712) | 81% |
+| 0654 | **wire_center** | (6172, 2680) | **0%** (0/49) |
+| 0654 | wire_near_pole | (2393, 2873) | 80% |
+| 0654 | pole_top | (2271, 2634) | 59% |
+| 0654 | background | (5515, 2484) | 4% |
+| 0656 | **wire_center** | (4734, 2935) | **0%** (0/49) |
+| 0656 | **wire_near_pole** | (6454, 2860) | **0%** (0/49) |
+| 0656 | pole_top | (6620, 2715) | 69% |
+| 0656 | pole_top | (1127, 2700) | 98% |
+| 0656 | background | (4366, 2492) | 96% |
+| 0661 | **wire_center** | (4687, 3119) | **8%** (4/49) |
+| 0661 | **wire_near_pole** | (3125, 2999) | **0%** (0/49) |
+| 0661 | **wire_near_pole** | (3448, 2832) | **0%** (0/49) |
+| 0661 | pole_top | (2894, 2877) | 100% |
+| 0661 | pole_top | (7999, 2911) | 86% |
+| 0661 | background | (4331, 2712) | 100% |
 
 ### 3. 영역 유형별 요약
 
 | 영역 유형 | completeness 범위 | 평균 |
 |-----------|-------------------|------|
-| **wire_center** | **0~20%** | **~12%** |
-| **wire_near_pole** | **0~91%** | **~22%** |
-| pole_top | 48~98% | ~72% |
-| background | 62~97% | ~80% |
+| **wire_center** | **0~8%** | **~3%** |
+| **wire_near_pole** | **0~80%** | **~20%** |
+| pole_top | 59~100% | ~82% |
+| background | 4~100% | ~66% |
 
-전선 영역(wire_center, wire_near_pole)에서 MVS completeness가 극히 낮다.
-특히 wire_center(전주 사이 전선 중앙)는 0~20%로 거의 완전히 결손.
-
-참고: wire_near_pole의 0654(91%)는 전주 바로 옆이라 전주의 valid depth가 포함된 것으로 보임.
+전선 영역(wire_center)에서 MVS completeness가 0~8%로 거의 완전히 결손.
+wire_near_pole도 대부분 0%이며, 0654(80%)는 전주 바로 옆이라 전주의 valid depth가 포함된 것으로 보임.
 
 ### 4. Depth Profile: MVS vs MDE (wire_center 수직 단면)
 
@@ -172,7 +172,7 @@ Metashape dense depth가 유효한 영역에서의 metric depth 값:
 
 ### 문제 정의 검증 ✅
 
-1. **MVS는 전선 영역에서 결손**: wire_center completeness 0~20%, wire_near_pole 0~13%
+1. **MVS는 전선 영역에서 결손**: wire_center completeness 0~8%, wire_near_pole 대부분 0%
 2. **MDE는 전선 영역에서 유효**: PatchFusion이 모든 pixel에 depth 추정 (100% coverage)
 3. **MVS는 전주/배경에서 유효**: pole_top 48~98%, background 62~97%
 
@@ -181,7 +181,7 @@ Metashape dense depth가 유효한 영역에서의 metric depth 값:
 
 ### Step 1 체크리스트
 
-- [x] 전선 위치에서 dense depth map 결손 확인 — **wire_center 0~20%로 결손 확인**
+- [x] 전선 위치에서 dense depth map 결손 확인 — **wire_center 0~8%로 결손 확인**
 - [x] Dense depth의 물리적 타당성 확인 — **pole 65~69m, bg 69~73m으로 합리적**
 
 ---
