@@ -1,0 +1,434 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<title>Region Selector — 전주/전선/배경 영역 지정</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: sans-serif; background: #1a1a1a; color: #eee; overflow: hidden; height: 100vh; display: flex; flex-direction: column; }
+
+/* Top bar */
+.topbar { background: #2a2a2a; padding: 8px 16px; display: flex; align-items: center; gap: 12px; flex-shrink: 0; border-bottom: 1px solid #444; }
+.topbar select, .topbar button { padding: 6px 12px; border-radius: 4px; border: 1px solid #555; background: #333; color: #eee; font-size: 0.85em; cursor: pointer; }
+.topbar button.active { background: var(--btn-color); border-color: var(--btn-color); color: #fff; font-weight: bold; }
+.topbar .spacer { flex: 1; }
+.topbar .save-btn { background: #4CAF50; border-color: #4CAF50; color: #fff; font-weight: bold; padding: 8px 20px; }
+.topbar .save-btn:hover { background: #45a049; }
+.topbar .undo-btn { background: #e65100; border-color: #e65100; color: #fff; }
+
+/* Region buttons */
+.region-btn { --btn-color: #888; }
+.region-btn[data-region="pole_top"] { --btn-color: #f44336; }
+.region-btn[data-region="wire_near_pole"] { --btn-color: #ff9800; }
+.region-btn[data-region="wire_center"] { --btn-color: #ffeb3b; }
+.region-btn[data-region="background"] { --btn-color: #2196f3; }
+.region-btn[data-region="sky"] { --btn-color: #e0e0e0; }
+
+/* Canvas area */
+.canvas-wrap { flex: 1; position: relative; overflow: hidden; cursor: crosshair; }
+#canvas { position: absolute; top: 0; left: 0; }
+
+/* Info panel */
+.panel { position: absolute; right: 12px; top: 12px; background: rgba(0,0,0,0.85); border-radius: 6px; padding: 12px; min-width: 220px; max-height: calc(100vh - 120px); overflow-y: auto; font-size: 0.8em; z-index: 5; }
+.panel h3 { margin-bottom: 8px; font-size: 1em; }
+.panel .region-group { margin-bottom: 8px; }
+.panel .region-group .label { font-weight: bold; margin-bottom: 2px; }
+.panel .point { color: #aaa; padding-left: 12px; cursor: pointer; }
+.panel .point:hover { color: #ff5252; text-decoration: line-through; }
+
+/* Zoom indicator */
+.zoom-info { position: absolute; left: 12px; bottom: 12px; background: rgba(0,0,0,0.7); padding: 4px 10px; border-radius: 4px; font-size: 0.8em; z-index: 5; }
+
+/* View toggle */
+.view-toggle { display: flex; gap: 4px; }
+.view-toggle button { padding: 4px 10px; }
+.view-toggle button.active { background: #666; }
+
+/* Help */
+.help { position: absolute; left: 12px; top: 12px; background: rgba(0,0,0,0.85); border-radius: 6px; padding: 10px; font-size: 0.75em; color: #aaa; z-index: 5; max-width: 250px; }
+.help kbd { background: #444; padding: 1px 5px; border-radius: 3px; font-size: 0.9em; }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <select id="imageSelect"></select>
+
+  <div class="view-toggle">
+    <button class="active" onclick="setView('rgb')" id="btn-rgb">RGB</button>
+    <button onclick="setView('depth')" id="btn-depth">Depth</button>
+    <button onclick="setView('overlay')" id="btn-overlay">Overlay</button>
+  </div>
+
+  <button class="region-btn active" data-region="pole_top" onclick="setRegion(this)">1: pole_top</button>
+  <button class="region-btn" data-region="wire_near_pole" onclick="setRegion(this)">2: wire_near_pole</button>
+  <button class="region-btn" data-region="wire_center" onclick="setRegion(this)">3: wire_center</button>
+  <button class="region-btn" data-region="background" onclick="setRegion(this)">4: background</button>
+  <button class="region-btn" data-region="sky" onclick="setRegion(this)">5: sky</button>
+
+  <div class="spacer"></div>
+  <button class="undo-btn" onclick="undoLast()">Undo (Z)</button>
+  <button class="save-btn" onclick="saveRegions()">💾 Save regions.json</button>
+</div>
+
+<div class="canvas-wrap" id="canvasWrap">
+  <canvas id="canvas"></canvas>
+
+  <div class="help" id="helpBox">
+    <b>조작법</b><br>
+    <kbd>스크롤</kbd> 줌 인/아웃<br>
+    <kbd>우클릭 드래그</kbd> 팬<br>
+    <kbd>좌클릭</kbd> 포인트 추가<br>
+    <kbd>1-5</kbd> 영역 전환<br>
+    <kbd>Z</kbd> Undo<br>
+    <kbd>H</kbd> 도움말 토글<br>
+    <kbd>F</kbd> 전체 보기 (fit)<br>
+    클릭 좌표는 <b>원본 해상도</b> 기준
+  </div>
+
+  <div class="panel" id="panel">
+    <h3>선택된 포인트</h3>
+    <div id="pointList"></div>
+  </div>
+
+  <div class="zoom-info" id="zoomInfo">100%</div>
+</div>
+
+<script>
+// ── State ──
+const ORIG_W = 8192, ORIG_H = 5460;
+const REGION_COLORS = {
+  pole_top: '#f44336',
+  wire_near_pole: '#ff9800',
+  wire_center: '#ffeb3b',
+  background: '#2196f3',
+  sky: '#e0e0e0'
+};
+const REGION_ORDER = ['pole_top', 'wire_near_pole', 'wire_center', 'background', 'sky'];
+
+let currentRegion = 'pole_top';
+let currentView = 'rgb';
+let currentImageName = '';
+
+// Per-image data: { imageName: { pole_top: [[x,y],...], ... } }
+const allRegions = {};
+
+// Zoom/pan state
+let scale = 1;
+let offsetX = 0, offsetY = 0;
+let isPanning = false;
+let panStartX, panStartY, panOffsetX, panOffsetY;
+
+// Images
+let imgRGB = null, imgDepth = null;
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+const wrap = document.getElementById('canvasWrap');
+
+// ── Initialization ──
+function init() {
+  const params = new URLSearchParams(window.location.search);
+  let images;
+  try {
+    images = JSON.parse(params.get('images'));
+  } catch {
+    images = [];
+  }
+  if (!images || images.length === 0) {
+    alert('gallery.html에서 이미지를 선택하세요');
+    window.location.href = '/scripts/region_selector/gallery.html';
+    return;
+  }
+
+  const sel = document.getElementById('imageSelect');
+  images.forEach(name => {
+    const opt = document.createElement('option');
+    opt.value = name;
+    opt.textContent = name;
+    sel.appendChild(opt);
+    // Initialize regions for each image
+    allRegions[name] = {};
+    REGION_ORDER.forEach(r => allRegions[name][r] = []);
+  });
+
+  sel.addEventListener('change', () => loadImage(sel.value));
+  loadImage(images[0]);
+
+  // Event listeners
+  canvas.addEventListener('click', onCanvasClick);
+  canvas.addEventListener('wheel', onWheel, { passive: false });
+  canvas.addEventListener('mousedown', onMouseDown);
+  canvas.addEventListener('mousemove', onMouseMove);
+  canvas.addEventListener('mouseup', onMouseUp);
+  canvas.addEventListener('contextmenu', e => e.preventDefault());
+  window.addEventListener('keydown', onKeyDown);
+  window.addEventListener('resize', render);
+}
+
+function loadImage(name) {
+  currentImageName = name;
+  document.getElementById('imageSelect').value = name;
+
+  // Load RGB thumbnail (display-sized)
+  imgRGB = new Image();
+  imgRGB.onload = () => {
+    fitToView();
+    loadDepthImage(name);
+  };
+  imgRGB.src = `/data/thumbnails/${name}`;
+}
+
+function loadDepthImage(name) {
+  const baseName = name.replace(/\.[^.]+$/, '');
+  imgDepth = new Image();
+  imgDepth.onerror = () => { imgDepth = null; render(); };
+  imgDepth.onload = () => render();
+  // Depth visualization — try loading a pre-rendered PNG
+  imgDepth.src = `/data/depth_vis/${baseName}_depth_vis.png`;
+}
+
+function fitToView() {
+  if (!imgRGB) return;
+  const wrapW = wrap.clientWidth;
+  const wrapH = wrap.clientHeight;
+  scale = Math.min(wrapW / imgRGB.width, wrapH / imgRGB.height) * 0.95;
+  offsetX = (wrapW - imgRGB.width * scale) / 2;
+  offsetY = (wrapH - imgRGB.height * scale) / 2;
+  render();
+}
+
+// ── Rendering ──
+function render() {
+  if (!imgRGB) return;
+  const wrapW = wrap.clientWidth;
+  const wrapH = wrap.clientHeight;
+  canvas.width = wrapW;
+  canvas.height = wrapH;
+
+  ctx.clearRect(0, 0, wrapW, wrapH);
+  ctx.save();
+  ctx.translate(offsetX, offsetY);
+  ctx.scale(scale, scale);
+
+  // Draw image
+  if (currentView === 'rgb' || !imgDepth) {
+    ctx.drawImage(imgRGB, 0, 0);
+  } else if (currentView === 'depth') {
+    ctx.drawImage(imgDepth, 0, 0, imgRGB.width, imgRGB.height);
+  } else if (currentView === 'overlay') {
+    ctx.drawImage(imgRGB, 0, 0);
+    ctx.globalAlpha = 0.5;
+    if (imgDepth) ctx.drawImage(imgDepth, 0, 0, imgRGB.width, imgRGB.height);
+    ctx.globalAlpha = 1.0;
+  }
+
+  // Draw points (in thumbnail coordinates)
+  const regions = allRegions[currentImageName];
+  if (regions) {
+    const thumbScaleX = imgRGB.width / ORIG_W;
+    const thumbScaleY = imgRGB.height / ORIG_H;
+    REGION_ORDER.forEach(regionName => {
+      const pts = regions[regionName] || [];
+      pts.forEach((pt, i) => {
+        const tx = pt[0] * thumbScaleX;
+        const ty = pt[1] * thumbScaleY;
+        const r = 6 / scale; // constant screen size
+
+        ctx.beginPath();
+        ctx.arc(tx, ty, r, 0, Math.PI * 2);
+        ctx.fillStyle = REGION_COLORS[regionName];
+        ctx.fill();
+        ctx.strokeStyle = '#000';
+        ctx.lineWidth = 1.5 / scale;
+        ctx.stroke();
+
+        // Label
+        ctx.fillStyle = REGION_COLORS[regionName];
+        ctx.font = `${Math.max(10, 12 / scale)}px sans-serif`;
+        ctx.fillText(`${regionName.substring(0, 4)}`, tx + r + 2 / scale, ty + 3 / scale);
+      });
+    });
+  }
+
+  ctx.restore();
+  document.getElementById('zoomInfo').textContent = `${Math.round(scale * 100)}%`;
+  updatePointList();
+}
+
+// ── Interaction ──
+function screenToThumb(sx, sy) {
+  return [(sx - offsetX) / scale, (sy - offsetY) / scale];
+}
+
+function thumbToOrig(tx, ty) {
+  if (!imgRGB) return [0, 0];
+  return [
+    Math.round(tx / imgRGB.width * ORIG_W),
+    Math.round(ty / imgRGB.height * ORIG_H)
+  ];
+}
+
+function onCanvasClick(e) {
+  if (e.button !== 0 || isPanning) return;
+  const rect = canvas.getBoundingClientRect();
+  const [tx, ty] = screenToThumb(e.clientX - rect.left, e.clientY - rect.top);
+
+  // Check bounds
+  if (tx < 0 || ty < 0 || tx > imgRGB.width || ty > imgRGB.height) return;
+
+  const [ox, oy] = thumbToOrig(tx, ty);
+  allRegions[currentImageName][currentRegion].push([ox, oy]);
+  render();
+}
+
+function onWheel(e) {
+  e.preventDefault();
+  const rect = canvas.getBoundingClientRect();
+  const mx = e.clientX - rect.left;
+  const my = e.clientY - rect.top;
+
+  const zoomFactor = e.deltaY < 0 ? 1.15 : 1 / 1.15;
+  const newScale = Math.max(0.1, Math.min(50, scale * zoomFactor));
+
+  // Zoom toward mouse
+  offsetX = mx - (mx - offsetX) * (newScale / scale);
+  offsetY = my - (my - offsetY) * (newScale / scale);
+  scale = newScale;
+  render();
+}
+
+function onMouseDown(e) {
+  if (e.button === 2) { // right click
+    isPanning = true;
+    panStartX = e.clientX;
+    panStartY = e.clientY;
+    panOffsetX = offsetX;
+    panOffsetY = offsetY;
+    canvas.style.cursor = 'grabbing';
+  }
+}
+
+function onMouseMove(e) {
+  if (isPanning) {
+    offsetX = panOffsetX + (e.clientX - panStartX);
+    offsetY = panOffsetY + (e.clientY - panStartY);
+    render();
+  }
+}
+
+function onMouseUp(e) {
+  if (e.button === 2) {
+    isPanning = false;
+    canvas.style.cursor = 'crosshair';
+  }
+}
+
+function onKeyDown(e) {
+  const key = e.key;
+  if (key >= '1' && key <= '5') {
+    const idx = parseInt(key) - 1;
+    setRegionByIndex(idx);
+  } else if (key === 'z' || key === 'Z') {
+    undoLast();
+  } else if (key === 'h' || key === 'H') {
+    const h = document.getElementById('helpBox');
+    h.style.display = h.style.display === 'none' ? 'block' : 'none';
+  } else if (key === 'f' || key === 'F') {
+    fitToView();
+  }
+}
+
+// ── Region selection ──
+function setRegion(btn) {
+  currentRegion = btn.dataset.region;
+  document.querySelectorAll('.region-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+}
+
+function setRegionByIndex(idx) {
+  const btns = document.querySelectorAll('.region-btn');
+  if (idx < btns.length) {
+    setRegion(btns[idx]);
+  }
+}
+
+function setView(view) {
+  currentView = view;
+  document.querySelectorAll('.view-toggle button').forEach(b => b.classList.remove('active'));
+  document.getElementById('btn-' + view).classList.add('active');
+  render();
+}
+
+function undoLast() {
+  const pts = allRegions[currentImageName][currentRegion];
+  if (pts.length > 0) {
+    pts.pop();
+    render();
+  }
+}
+
+// ── Point list panel ──
+function updatePointList() {
+  const regions = allRegions[currentImageName];
+  const container = document.getElementById('pointList');
+  container.innerHTML = '';
+
+  REGION_ORDER.forEach(name => {
+    const pts = regions[name] || [];
+    if (pts.length === 0) return;
+
+    const group = document.createElement('div');
+    group.className = 'region-group';
+    group.innerHTML = `<div class="label" style="color:${REGION_COLORS[name]}">${name} (${pts.length})</div>`;
+
+    pts.forEach((pt, i) => {
+      const div = document.createElement('div');
+      div.className = 'point';
+      div.textContent = `(${pt[0]}, ${pt[1]})`;
+      div.title = '클릭하면 삭제';
+      div.addEventListener('click', () => {
+        pts.splice(i, 1);
+        render();
+      });
+      group.appendChild(div);
+    });
+
+    container.appendChild(group);
+  });
+}
+
+// ── Save ──
+function saveRegions() {
+  // Build output for each image
+  const allOutput = {};
+  for (const [imageName, regions] of Object.entries(allRegions)) {
+    const hasPoints = REGION_ORDER.some(r => regions[r].length > 0);
+    if (!hasPoints) continue;
+
+    const entry = { image: imageName };
+    REGION_ORDER.forEach(r => {
+      if (regions[r].length > 0) entry[r] = regions[r];
+    });
+    allOutput[imageName] = entry;
+  }
+
+  if (Object.keys(allOutput).length === 0) {
+    alert('포인트를 하나 이상 추가하세요');
+    return;
+  }
+
+  // Download as JSON (array of entries)
+  const entries = Object.values(allOutput);
+  const blob = new Blob([JSON.stringify(entries.length === 1 ? entries[0] : entries, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'regions.json';
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+init();
+</script>
+</body>
+</html>

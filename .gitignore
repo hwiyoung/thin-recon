@@ -1,0 +1,21 @@
+# Generated data (large, reproducible)
+data/depth_output/
+data/depth_vis/
+data/thumbnails/
+data/analysis/
+data/images/
+
+# Binary depth formats
+*.npy
+*.tif
+*.exr
+
+# Python
+__pycache__/
+*.pyc
+
+# OS
+.DS_Store
+
+# Claude Code local settings
+.claude/

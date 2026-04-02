@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<title>이미지 선별 — 전주+전선이 보이는 이미지 선택</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: sans-serif; background: #1a1a1a; color: #eee; padding: 20px; }
+h1 { margin-bottom: 10px; font-size: 1.4em; }
+.info { color: #aaa; margin-bottom: 20px; font-size: 0.9em; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
+.card { position: relative; cursor: pointer; border: 3px solid transparent; border-radius: 6px; overflow: hidden; transition: border-color 0.2s; }
+.card.selected { border-color: #4CAF50; }
+.card img { width: 100%; display: block; }
+.card .name { position: absolute; bottom: 0; left: 0; right: 0; background: rgba(0,0,0,0.7); padding: 4px 8px; font-size: 0.75em; }
+.card .check { position: absolute; top: 8px; right: 8px; width: 28px; height: 28px; border-radius: 50%; background: rgba(0,0,0,0.5); border: 2px solid #fff; display: flex; align-items: center; justify-content: center; font-size: 16px; }
+.card.selected .check { background: #4CAF50; }
+.toolbar { position: fixed; bottom: 0; left: 0; right: 0; background: #333; padding: 12px 20px; display: flex; justify-content: space-between; align-items: center; z-index: 10; }
+.toolbar button { padding: 10px 24px; font-size: 1em; border: none; border-radius: 4px; cursor: pointer; background: #4CAF50; color: #fff; }
+.toolbar button:hover { background: #45a049; }
+</style>
+</head>
+<body>
+<h1>전주 + 전선이 보이는 이미지를 선택하세요</h1>
+<p class="info">클릭으로 선택/해제. 2~3장이면 충분합니다. 선택 후 "다음 → Region Selector" 버튼을 누르세요.</p>
+<div class="grid" id="grid"></div>
+<div class="toolbar">
+  <span id="count">선택: 0장</span>
+  <button onclick="goToSelector()">다음 → Region Selector</button>
+</div>
+
+<script>
+const THUMB_DIR = '/data/thumbnails/';
+const selected = new Set();
+
+async function loadImages() {
+  // Fetch thumbnail list from a generated JSON, or hardcode from directory listing
+  const resp = await fetch('/scripts/region_selector/image_list.json');
+  const images = await resp.json();
+  const grid = document.getElementById('grid');
+
+  images.forEach(name => {
+    const card = document.createElement('div');
+    card.className = 'card';
+    card.innerHTML = `
+      <img src="${THUMB_DIR}${name}" loading="lazy" alt="${name}">
+      <div class="name">${name}</div>
+      <div class="check">✓</div>
+    `;
+    card.addEventListener('click', () => {
+      if (selected.has(name)) {
+        selected.delete(name);
+        card.classList.remove('selected');
+      } else {
+        selected.add(name);
+        card.classList.add('selected');
+      }
+      document.getElementById('count').textContent = `선택: ${selected.size}장`;
+    });
+    grid.appendChild(card);
+  });
+}
+
+function goToSelector() {
+  if (selected.size === 0) {
+    alert('최소 1장을 선택하세요');
+    return;
+  }
+  const params = new URLSearchParams();
+  params.set('images', JSON.stringify([...selected]));
+  window.location.href = '/scripts/region_selector/selector.html?' + params.toString();
+}
+
+loadImages();
+</script>
+</body>
+</html>

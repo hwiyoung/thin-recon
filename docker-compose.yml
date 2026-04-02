@@ -1,0 +1,26 @@
+services:
+  patchfusion:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    volumes:
+      - /media/innopam/InnoPAM-8TB/hwiyoung/data/seongsu/testset/raw/images:/data/images:ro
+      - ./data/depth_output:/data/depth_output
+      - ./run_patchfusion.py:/scripts/run_patchfusion.py:ro
+      - ./patch_patchfusion.py:/scripts/patch_patchfusion.py:ro
+      - hf_cache:/root/.cache/huggingface
+    working_dir: /workspace/PatchFusion
+    shm_size: '8g'
+    entrypoint: ["/bin/bash"]
+    stdin_open: true
+    tty: true
+
+volumes:
+  hf_cache:
