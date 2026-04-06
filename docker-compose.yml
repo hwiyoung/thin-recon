@@ -22,5 +22,31 @@ services:
     stdin_open: true
     tty: true
 
+  priorda:
+    build:
+      context: .
+      dockerfile: Dockerfile.priorda
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    volumes:
+      - /media/innopam/InnoPAM-8TB/hwiyoung/data/seongsu/testset/raw/images:/data/images:ro
+      - /media/innopam/InnoPAM-8TB/data/seongsu/depthmaps/ultrahigh:/data/mvs_depth:ro
+      - ./data/colmap_export:/data/colmap_export:ro
+      - ./data/depth_output:/data/depth_output:ro
+      - ./data/priorda_output:/data/priorda_output
+      - ./data/sparse_depth_maps:/data/sparse_depth_maps
+      - ./scripts:/scripts:ro
+      - hf_cache:/root/.cache/huggingface
+    working_dir: /workspace
+    shm_size: '8g'
+    entrypoint: ["/bin/bash"]
+    stdin_open: true
+    tty: true
+
 volumes:
   hf_cache:

@@ -4,6 +4,12 @@ data/depth_vis/
 data/thumbnails/
 data/analysis/
 data/images/
+data/fused_output/
+data/priorda_output/
+data/sparse_depth_maps/
+
+# External repos
+Prior-Depth-Anything/
 
 # Binary depth formats
 *.npy

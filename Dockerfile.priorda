@@ -1,0 +1,38 @@
+# Prior Depth Anything Docker environment
+# PyTorch 2.2.2 + CUDA 12.1 (torch_cluster requires matching CUDA)
+
+FROM pytorch/pytorch:2.2.2-cuda12.1-cudnn8-devel
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git libgl1-mesa-glx libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /workspace
+
+# Copy Prior-Depth-Anything source
+COPY Prior-Depth-Anything /workspace/Prior-Depth-Anything
+
+WORKDIR /workspace/Prior-Depth-Anything
+
+# Install dependencies
+RUN pip install --no-cache-dir \
+    numpy==1.25.2 \
+    huggingface_hub==0.26.5 \
+    einops==0.8.1 \
+    Pillow==11.0.0 \
+    opencv-python==4.10.0.84 \
+    safetensors==0.4.5 \
+    matplotlib==3.9.3
+
+# Install torch_cluster for CUDA 12.1
+RUN pip install --no-cache-dir \
+    torch_cluster==1.6.3 -f https://pytorch-geometric.com/whl/torch-2.2.2+cu121.html
+
+# Install Prior-Depth-Anything as package
+RUN pip install --no-cache-dir -e .
+
+ENV PYTHONPATH="/workspace/Prior-Depth-Anything:${PYTHONPATH}"
+
+WORKDIR /workspace
