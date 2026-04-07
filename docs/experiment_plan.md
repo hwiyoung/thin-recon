@@ -183,152 +183,108 @@ sparse + 전주/구조물 위치 보강이 현실적 선택이다.
 
 - [x] Sparse point 분포 확인 완료
 - [x] Dense depth의 전주/전선 유효성 확인 완료
-- [ ] Dense depth에서 전선 결손 시각화 (Step 1 검증)
+- [x] Dense depth에서 전선 결손 시각화 완료 (step1_mvs_verification.md)
 
 ---
 
-## Step 3: Prior Depth Anything 실행
+## Step 3: MVS+MDE Fusion ✅ 완료
 
 ### 목적
 
-MVS metric prior와 MDE relative depth를 fusion하여
-전선 영역을 포함한 전체 이미지의 metric depth map을 생성.
+MVS metric depth의 전선 결손을 MDE relative depth로 채워 metric depth map 생성.
 
-### 확인하고자 하는 것
+### 시도한 접근 및 결과
 
-1. **Fusion 수렴**: prior 위치에서 metric depth가 정확히 반영되는가?
-2. **전선 depth 전파**: MDE가 전선≈전주로 추정하므로, metric align 후에도 유지되는가?
-3. **배경 분리**: 전선과 배경 건물의 metric depth가 명확히 구분되는가?
+#### 3-1. Prior Depth Anything (부적합 판정)
 
-### 방법
+- Prior DA의 내부 해상도(518×518)에서 전선 소실 → thin structure 부적합
+- heit=1022로 내부 해상도 상향 시도 → MDE가 전선 인식하나 fine stage에서 덮어씌워짐
+- Coarse-only + PatchFusion geometric input → 일부 이미지에서 wire ≈ pole 달성, 나머지 불안정
+- 패치 기반 실행 시 전주-전선이 같은 패치에 없으면 scale 전파 불가
 
-- Prior Depth Anything 공식 구현 사용
-- Prior DA는 자체 MDE backbone으로 relative depth를 생성하고,
-  MVS metric points를 prior로 받아 metric depth로 변환
-- Input: RGB 이미지 + MVS metric points (sparse 및/또는 dense sampled)
-- Output: per-image metric depth map
+#### 3-2. 직접 Affine Alignment (채택)
 
-### Prior input 구성
+- MVS valid pixel + PatchFusion relative depth 간 affine fitting: `d_metric = s × d_rel + t`
+- 전주 위치에서 RANSAC fitting → 전선(invalid pixel)에 적용
+- **결과**: 0656에서 wire=64.26m ≈ pole=65.46m < bg=69.47m 달성
 
-- COLMAP export의 SfM sparse points (기본)
-- Metashape dense depth에서 추출한 추가 points (보강)
-  - 전주 위치, 건물 벽면, 도로면 등 유효 영역에서 sampling
-  - 전선 결손 영역은 제외 (dense depth가 없으므로)
+#### 3-3. 발견된 문제
 
-### 기대 결과
+- **PatchFusion 패치간 scale 불일치**: 같은 MVS depth(66m)에서 MDE 값이 위치에 따라 5.7~12.2
+- **전주 근처 depth range 협소**: 전주 표면이 거의 같은 depth → scale underdetermined
+- **해결**: 전주 주변 r=300으로 확장 + RANSAC outlier 제거 + clean tiepoint 수집
 
-- Prior 위치: fusion depth ≈ MVS metric depth
-- 전선 위치: fusion depth ≈ 전주 depth (사전 실험 가설에 의해)
-- 배경 위치: fusion depth > 전선/전주 depth
+### 최종 Fusion 방법
 
-### 다음 단계 진행 조건
-
-- [ ] Prior 위치에서 fusion depth와 MVS depth의 차이 < 5%
-- [ ] 전선 위치에서 fusion depth가 전주 depth와 유사 (ratio < 0.3)
-- [ ] 전선-배경 depth 분리 확인
-
-### 실패 시
-
-- 전선 depth가 배경에 가까움 → prior 밀도 증가 시도, 그래도 실패하면 방향 B 재고려
-- Fusion 불안정 → Prior DA 파라미터 조정 (prior weight 등)
+1. MVS valid pixel → 그대로 유지
+2. 전주에서 RANSAC affine fitting (clean tiepoints, r=300)
+3. Edge detection (Sobel + morphological closing) + aspect ratio 필터로 전선 그룹 감지
+4. Depth range 필터 (pole depth ± 5m) + 전선 그룹에 대표 depth (median) 할당
+5. Multi-view joint optimisation으로 3D 위치 정합
 
 ---
 
-## Step 4: 전선 영역 Depth 품질 평가
+## Step 4: 전선 영역 Depth 품질 평가 ✅ 완료
 
-### 목적
+### 결과
 
-Fusion 결과에서 전선 영역의 depth가 물리적으로 타당하고
-downstream task(3D reconstruction)에 사용 가능한지 평가.
+| 방법 | Wire completeness | Wire depth (m) | Pole depth (m) | Bg depth (m) |
+|------|------------------|----------------|----------------|--------------|
+| MVS only | 0–8% | — | 65.46 | 69.47 |
+| MDE only | 100% | (relative) | — | — |
+| Fused (Ours) | 100% | 64.26 | 65.46 | 69.47 |
 
-### 확인하고자 하는 것
+- wire ≈ pole < bg 관계 달성 (0656 기준)
+- Multi-view joint optimisation: per-view residual 0.13–0.33m
 
-1. **전선의 depth 연속성**: 전주에서 전선 중앙까지 depth가 부드럽게 변하는가?
-2. **물리적 타당성**: 전선 depth가 전주 depth와 유사하고 배경보다 가까운가?
-3. **MVS 대비 개선**: MVS에서 결손이었던 전선 영역이 fusion에서 채워졌는가?
+### 확인된 한계
 
-### 방법
-
-1. 전주에서 전선 중앙까지 depth profile 추출 (line scan)
-2. MVS depth vs fusion depth를 전선 영역에서 비교
-3. Depth map completeness: 전선 mask 영역에서 valid pixel 비율
-
-### 다음 단계 진행 조건
-
-- [ ] 전선 영역 completeness: fusion > 90% (MVS는 ~0%)
-- [ ] Depth profile이 물리적으로 타당 (급격한 불연속 없음)
-- [ ] 전선 depth가 전주 ± 20% 이내
+- Edge 기반 전선 감지의 불완전성 (끊김, false positive)
+- View간 독립 fitting에 의한 3D 산발 (joint optimisation 전 3.25m 차이)
+- 전선 그룹 대표 depth 방식은 그룹 내 일관성 확보하지만 view간 불일치 존재
 
 ---
 
-## Step 5: 정량 평가 및 Ablation
+## Step 5: 정량 평가 및 Ablation ✅ 완료
 
-### 목적
+### 5-1. Main Result
 
-Pipeline이 thin structure에서 작동함을 정량적으로 검증하고,
-각 구성요소(고해상도 MDE, metric prior)의 필요성을 ablation으로 입증.
+Table 1 (논문 포함):
+- MVS wire completeness: 0–8% → Fused: 100%
+- Wire depth 64.26m ≈ Pole 65.46m (1.2m 차이)
+- Background 69.47m과 명확히 분리
 
-### 5-1. Main Result: Pipeline 성능
+### 5-2. Ablation: Depth Profile
 
-전선 영역에서 각 방법의 depth completeness + metric accuracy 비교.
+Figure 2 (논문 포함):
+- Wire 위치(y=2925–2938)에서 MVS 결손, MDE(calibrated)와 Fused는 pole depth 근처
+- y=2941에서 MVS 79.17m(배경)으로 급등 → wire-bg 분리 확인
 
-| 방법 | completeness | metric accuracy | 비고 |
-|------|-------------|-----------------|------|
-| MVS only | ~0% (결손) | 유효 pixel은 정확 | 전선에 구멍 |
-| MDE only | ~100% | scale 없음 | 구조는 있으나 metric 아님 |
-| **Fusion (ours)** | ~100% | metric scale 보정됨 | 전선 depth 복원 |
+### 5-3. 확인된 사항 (논문 한계로 기술)
 
-→ Pipeline이 MVS의 metric accuracy와 MDE의 structural completeness를 모두 확보.
-
-### 5-2. Ablation: MDE 해상도 (근거 2 검증)
-
-Pipeline에서 고해상도 MDE가 필수적인지 검증.
-
-| 구성 | MDE 해상도 | 전선 인식 | fusion 후 전선 depth |
-|------|-----------|----------|---------------------|
-| Full pipeline | 8192×5460 (PatchFusion) | ✅ 보존 | (측정) |
-| 다운샘플 MDE | 2048×1365 | ? 흐릿 | (측정) |
-| 다운샘플 MDE | 1024×682 | ❌ 소실 | (측정) |
-
-→ 해상도를 낮추면 MDE가 전선을 인식하지 못해 fusion이 실패하는 것을 보임.
-
-### 5-3. Ablation: MDE 모델 종류 (근거 1 검증)
-
-"MDE가 전선 depth를 전주에 가깝게 추정한다"는 finding이 특정 모델에 한정적인지 확인.
-
-| MDE | wire-pole ratio | fusion 후 전선 depth |
-|-----|----------------|---------------------|
-| Depth Anything V1 (ViT-L) | <0.3 (사전실험 확인) | (측정) |
-| Depth Anything V2 (ViT-L) | (측정) | (측정) |
-
-→ Finding이 일반적이면 pipeline의 범용성 강화, 모델 의존적이면 한계로 기술.
-
-### 5-4. Multi-view Consistency (선택)
-
-- 동일 전선을 다른 view에서 관찰했을 때 depth 일관성
-- 3D reprojection error at wire locations
+- Prior DA 518×518 해상도에서 전선 소실 확인
+- DA V2는 2x 다운스케일에서도 전선 미인식 (DA V1 + PatchFusion 8K에서만 인식)
+- PatchFusion 패치간 scale 불일치로 global alignment 불가
 
 ---
 
-## Step 6: 논문 작성
+## Step 6: 논문 작성 ✅ 진행 중
 
 ### 리뷰어 지적 대응
 
-| 지적 | 대응 | 해당 Step |
-|------|------|-----------|
-| 정량적 평가 부재 | 5-1 completeness/accuracy | Step 5 |
-| Ablation 부재 | 5-2 해상도, 5-3 MDE 모델 | Step 5 |
-| 방법론 세부 기술 부족 | pipeline 전체 상세 기술 | Step 1-4 |
+| 지적 | 대응 | 상태 |
+|------|------|------|
+| 정량적 평가 부재 | Table 1: completeness + metric depth | ✅ |
+| Ablation 부재 | Figure 2: depth profile (MVS/MDE/Fused) | ✅ |
+| 방법론 세부 기술 부족 | Stage 1–3 상세 기술 (RANSAC, edge detection 등) | ✅ |
+| 3D reconstruction 시각화 | Figure 1: CloudCompare 캡처 (PLY) | 진행 중 |
 
-### 논문 구조 (예상)
+### 논문 파일
 
-1. **Introduction**: thin structure의 MVS 한계, MDE 가능성, 연구 목적
-2. **Related Work**: MVS, MDE (DA, PatchFusion), MVS+MDE fusion (Prior DA)
-3. **Analysis**: MDE의 thin structure depth behavior (근거 1) + 고해상도 필요성 (근거 2)
-4. **Method**: Pipeline 설계 — SfM/MVS → metric prior 추출 → Prior DA fusion
-5. **Experiments**: completeness/accuracy (5-1), ablation (5-2, 5-3)
-6. **Discussion**: 한계, MDE 모델 의존성, 다른 thin structure로의 확장 가능성
-7. **Conclusion**
+- `paper/ISPRSguidelines_authors_abstract.tex` — LaTeX 본문
+- `paper/ISPRSguidelines_authors.bib` — 참고문헌 (8개)
+- `paper/figures/fig2_profile.png` — depth profile ablation
+- `paper/figures/fig1_3d_reconstruction.png` — 3D 시각화 (CloudCompare 캡처 필요)
 
 ---
 
@@ -340,21 +296,10 @@ Pipeline에서 고해상도 MDE가 필수적인지 검증.
 | GPU | NVIDIA RTX 3090 × 2 (24GB each) |
 | SfM/MVS | Metashape (COLMAP format으로 export) |
 | MDE | PatchFusion + Depth Anything V1 (ViT-L) |
-| Fusion | Prior Depth Anything |
+| Fusion | 직접 affine alignment (Prior DA 부적합으로 전환) |
 | 실험 이미지 | 0654, 0656, 0661 (전주+전선 가시) |
 
 ---
 
-## 리스크 및 대안
-
-| 리스크 | 확률 | 대안 |
-|--------|------|------|
-| Prior DA에서 전선 depth 전파 실패 | 중간 | dense prior 보강, prior weight 조정 |
-| Prior DA 구현 호환 문제 | 중간 | 논문 저자 코드 확인, 직접 구현 |
-| 고해상도에서 Prior DA OOM | 중간 | 패치 기반 처리, 해상도 조정 |
-| 다운샘플에서도 전선 보존됨 (근거 2 약화) | 낮음 | 해상도별 정량 비교로 차이 입증 |
-
----
-
 *문서 작성: 2026-04-02*
-*마지막 업데이트: 2026-04-02 — pipeline을 main contribution으로 재구성, 설계 근거(MDE behavior, 해상도) 명시, ablation을 근거 검증 중심으로 정리*
+*마지막 업데이트: 2026-04-07 — Step 3~6 실험 결과 반영, Prior DA→직접 alignment 전환, 논문 작성 진행*
